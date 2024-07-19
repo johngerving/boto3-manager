@@ -77,6 +77,12 @@ class Boto3Manager:
         
         return True
     
+    def uploadFilesRecursive(self, path, destination):
+        '''Uploads files in a path recursively'''
+
+        path = Path(path)
+        print([x for x in path.glob('**/*')])
+    
     def downloadFolder(self, folder, destination):
         '''Downloads the contents of a folder from the S3 bucket
         
