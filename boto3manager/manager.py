@@ -135,7 +135,37 @@ class Boto3Manager:
         
         # Loop through each file in bucket
         for item in contents:
-            print(item['Key'])
+            try:
+                # Get name of file in S3 bucket
+                key = item['Key']
+
+                # Split key by slashes - remove prefix from beginning
+                path_list = key.removeprefix(prefix).split('/')
+                # Get the base name of the file
+                base_name = path_list[-1]
+
+                # Create a Path at the destination specified
+                dir = Path(destination)
+
+                # If the current item has a prefix, append it to the destination path
+                if len(path_list) > 1:
+                    dir = dir / '/'.join(path_list[:-1])
+
+                # Make a directory at the specified path if it doesn't exist
+                dir.mkdir(parents=True, exist_ok=True)
+
+                # Create a new file path in the destination directory
+                new_file_path = dir / base_name
+            
+                # Download the file from the S3 bucket to the file path on the user's local machine
+                self.client.download_file(self.bucket_name, key, new_file_path)
+            except ClientError as e:
+                print(e)
+                return False
+            
+        return True
+
+
 
 
     
