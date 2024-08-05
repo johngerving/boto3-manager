@@ -1,0 +1,8 @@
+Metadata-Version: 2.1
+Name: boto3manager
+Version: 1.0
+Summary: A Python package to manage Boto3 file uploads and downloads
+Home-page: https://gitlab.nrp-nautilus.io/humboldt/boto3-manager.git
+Author: John Gerving
+Author-email: jhg51@humboldt.edu
+License: MIT

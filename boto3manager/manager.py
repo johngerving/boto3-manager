@@ -67,7 +67,7 @@ class Boto3Manager:
         for path in paths_to_string:
             try:
                 # Get name of file
-                object_name = os.path.base_name(path)
+                object_name = os.path.basename(path)
                 # Upload file
                 if destination is None:
                     response = self.client.upload_file(path, self.bucket_name, object_name)
@@ -104,17 +104,40 @@ class Boto3Manager:
         
         # Loop through files
         for file in files:
+            # Remove the path from the beginning of the path to upload to bucket
+            destination_path = file.removeprefix(str(path) + "/")
+
+            # Prefix destination path if provided
+            if destination is not None:
+                destination_path = destination + destination_path
+
             try:
-                # Upload file - add destination as prefix if provided
-                if destination is None:
-                    self.client.upload_file(file, self.bucket_name, file)
-                else:
-                    self.client.upload_file(file, self.bucket_name, f"{destination}/{file}")
+                # Upload file
+                self.client.upload_file(file, self.bucket_name, destination_path)
             except ClientError as e:
                 print(e)
                 return False
             
         return True
+    
+    def download_files_recursive(self, destination, prefix=''):
+        '''Downloads the contents of a bucket or folder recursively from an S3 bucket
+
+        :param destination: The destination to download the files to
+        :param prefix: The prefix of files in the S3 bucket to download from
+        '''
+
+        assert destination is not None and isinstance(destination, str), "Destination must be a string"
+        assert prefix is not None and isinstance(prefix, str), "Prefix must be a string"
+
+        # Get contents of bucket with prefix
+        contents = self.client.list_objects_v2(Bucket=self.bucket_name, Prefix=prefix)['Contents']
+        
+        # Loop through each file in bucket
+        for item in contents:
+            print(item['Key'])
+
+
     
     def download_folder(self, folder, destination):
         '''Downloads the contents of a folder from the S3 bucket
