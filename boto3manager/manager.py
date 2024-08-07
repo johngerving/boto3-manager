@@ -1,11 +1,16 @@
 import boto3
+import botocore
+import boto3.s3.transfer as s3transfer
 from botocore.exceptions import ClientError
 import configparser
 from pathlib import Path
 import os
+from concurrent.futures import ThreadPoolExecutor
+import concurrent.futures
+from tqdm import tqdm
 
 class Boto3Manager:
-    def __init__(self, credentials_file_path, profile, endpoint_url, bucket_name):
+    def __init__(self, credentials_file_path, profile, endpoint_url, bucket_name, workers=20):
         '''
         :param credentials_file_path: A path to a file containing S3 credentials
         :param profile: The S3 profile to use from the credentials file
@@ -31,11 +36,20 @@ class Boto3Manager:
 
         # Initialize boto3 session
         self.session = boto3.session.Session(aws_access_key_id=self.access_key, aws_secret_access_key=self.secret_key)
+        # Initialize config
+        self.config = botocore.config.Config(max_pool_connections=workers)
+        # Initialize transfer config
+        self.transfer_config = s3transfer.TransferConfig(
+            use_threads=True,
+            max_concurrency=workers
+        )
         # Initialize boto3 client
         self.client = self.session.client(
             service_name='s3',
             endpoint_url=self.endpoint_url
         )
+        # Create transfer manager
+        self.transfer_manager = s3transfer.create_transfer_manager(self.client, self.transfer_config)
 
     def upload_all(self, directory, destination=None):
         '''Uploads all files from a directory to an S3 bucket
@@ -80,6 +94,43 @@ class Boto3Manager:
         
         return True
     
+    def fast_upload(self, path, destination=None):
+        '''Uploads files in a path recursively
+        
+        :param path: The path to upload files from
+        :param destination: The destination in the S3 bucket to upload to
+
+        :return: True if all uploads successful, False otherwise
+        '''
+
+        # Check parameters
+        assert path is not None and isinstance(path, str), "Path must be a string"
+        assert destination is None or isinstance(destination, str), "Destination must be a string"
+
+        # Convert path given into a Pure path
+        path = Path(path)
+        
+        # Ensure path exists
+        assert path.exists(), "Path does not exist"
+
+        # Get files in directory recursively, but only if they are not directories
+        files = [str(x) for x in path.glob('**/*') if not x.is_dir()]
+
+        totalsize = sum([os.stat(f).st_size for f in files])
+
+        with tqdm(desc='upload', ncols=60, total=totalsize, unit='B', unit_scale=1) as progress_bar:
+            for file in files:
+                # Remove the path from the beginning of the path to upload to bucket
+                destination_path = file.removeprefix(str(path) + "/")
+
+                # Prefix destination path if provided
+                if destination is not None:
+                    destination_path = destination + destination_path
+
+                self.transfer_manager.upload(file, self.bucket_name, destination_path, subscribers=[s3transfer.ProgressCallbackInvoker(progress_bar.update)])
+            
+            self.transfer_manager.shutdown()
+
     def upload_files_recursive(self, path, destination=None):
         '''Uploads files in a path recursively
         
@@ -101,9 +152,8 @@ class Boto3Manager:
 
         # Get files in directory recursively, but only if they are not directories
         files = [str(x) for x in path.glob('**/*') if not x.is_dir()]
-        
-        # Loop through files
-        for file in files:
+
+        def upload_single_file(file):
             # Remove the path from the beginning of the path to upload to bucket
             destination_path = file.removeprefix(str(path) + "/")
 
@@ -111,13 +161,34 @@ class Boto3Manager:
             if destination is not None:
                 destination_path = destination + destination_path
 
-            try:
-                # Upload file
-                self.client.upload_file(file, self.bucket_name, destination_path)
-            except ClientError as e:
-                print(e)
-                return False
-            
+            self.client.upload_file(file, self.bucket_name, destination_path)
+            print(file)
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            executor.map(upload_single_file, files)
+        
+        # with ThreadPoolExecutor() as executor:
+        #     # Start the upload operations and mark each future with its filename
+        #     futures = {}
+        #     for file in files:
+        #         # Remove the path from the beginning of the path to upload to bucket
+        #         destination_path = file.removeprefix(str(path) + "/")
+
+        #         # Prefix destination path if provided
+        #         if destination is not None:
+        #             destination_path = destination + destination_path
+                
+        #         # Submit a future to the executor to upload the file
+        #         future = executor.submit(self.client.upload_file, file, self.bucket_name, destination_path)
+
+        #         # Add an entry in the dictionary containing the filename
+        #         futures[future] = file
+        #     # Loop through the futures as they complete
+        #     for future in concurrent.futures.as_completed(futures):
+        #         # Get the filename and print it
+        #         filename = futures[future]
+        #         print(f"Uploaded {filename}")
+
         return True
     
     def download_files_recursive(self, destination, prefix=''):
@@ -165,10 +236,6 @@ class Boto3Manager:
             
         return True
 
-
-
-
-    
     def download_folder(self, folder, destination):
         '''Downloads the contents of a folder from the S3 bucket
         
