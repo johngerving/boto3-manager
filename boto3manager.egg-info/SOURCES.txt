@@ -6,4 +6,5 @@ boto3manager.egg-info/PKG-INFO
 boto3manager.egg-info/SOURCES.txt
 boto3manager.egg-info/dependency_links.txt
 boto3manager.egg-info/not-zip-safe
+boto3manager.egg-info/requires.txt
 boto3manager.egg-info/top_level.txt
