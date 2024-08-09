@@ -5,9 +5,8 @@ from botocore.exceptions import ClientError
 import configparser
 from pathlib import Path
 import os
-from concurrent.futures import ThreadPoolExecutor
-import concurrent.futures
 from tqdm import tqdm
+from wakepy import keep
 
 class Boto3Manager:
     def __init__(self, credentials_file_path, profile, endpoint_url, bucket_name, workers=20):
@@ -48,8 +47,148 @@ class Boto3Manager:
             service_name='s3',
             endpoint_url=self.endpoint_url
         )
+        # Create paginator
+        self.paginator = self.client.get_paginator('list_objects_v2')
+
+    def upload(self, path, destination=None):
+        '''Uploads files in a path recursively
+        
+        :param path: The path to upload files from
+        :param destination: The destination in the S3 bucket to upload to
+
+        :return: True if all uploads successful, False otherwise
+        '''
+
+        # Check parameters
+        assert path is not None and isinstance(path, str), "Path must be a string"
+        assert destination is None or isinstance(destination, str), "Destination must be a string"
+
+        # Convert path given into a Pure path
+        path = Path(path)
+        
+        # Ensure path exists
+        assert path.exists(), "Path does not exist"
+
         # Create transfer manager
-        self.transfer_manager = s3transfer.create_transfer_manager(self.client, self.transfer_config)
+        transfer_manager = s3transfer.create_transfer_manager(self.client, self.transfer_config)
+
+        # Get files in directory recursively, but only if they are not directories
+        files = [str(x) for x in path.glob('**/*') if not x.is_dir()]
+
+        # Get total size of files in bytes
+        totalsize = sum([os.stat(f).st_size for f in files])
+
+        def wakepy_fail(result):
+            print("Warning: Unable to keep system awake during upload.")
+
+        # Prevent the system from sleeping during upload
+        with keep.running(on_fail=wakepy_fail):
+            # Display a progress bar with the upload progress
+            with tqdm(desc='upload', ncols=60, total=totalsize, unit='B', unit_scale=1) as progress_bar:
+                for file in files:
+                    try:
+                        # Remove the path from the beginning of the path to upload to bucket
+                        destination_path = file.removeprefix(str(path) + "/")
+
+                        # Prefix destination path if provided
+                        if destination is not None:
+                            destination_path = destination + destination_path
+
+                        # Upload the file, trigger a callback function to update the progress bar
+                        transfer_manager.upload(file, self.bucket_name, destination_path, subscribers=[s3transfer.ProgressCallbackInvoker(progress_bar.update)])
+                    except Exception as e:
+                        print(e)
+                        return False
+                    
+                # Wait for upload to be complete to shut down
+                transfer_manager.shutdown()
+
+                return True
+        
+    def list_all_objects(self, **kwargs):
+        '''Lists all objects in an S3 bucket
+        
+        :param **kwargs: Keyword arguments to be passed to list_objects_v2 method
+        
+        :yield: Generator object with contents of bucket
+        '''
+
+        # Paginate the objects to overcome the 1000 object limit
+        pages = self.paginator.paginate(Bucket=self.bucket_name, **kwargs)
+
+        # Loop through pages
+        for page in pages:
+            # Loop through objects in page
+            if 'Contents' in page:
+                for obj in page['Contents']:
+                    # Yield generator object containing objects in bucket
+                    yield obj
+
+    def download(self, destination, prefix=''):
+        '''Downloads the contents of a bucket or folder recursively from an S3 bucket
+        
+        :param destination: The destination to download the files to
+        :param prefix: The prefix of files in the S3 bucket to download from
+
+        :return: True if all uploads successful, otherwise False
+        '''
+
+        assert destination is not None and isinstance(destination, str), "Destination must be a string"
+        assert prefix is not None and isinstance(prefix, str), "Prefix must be a string"
+
+        # Create transfer manager
+        transfer_manager = s3transfer.create_transfer_manager(self.client, self.transfer_config)
+
+        # Get contents of bucket with prefix
+        contents = list(self.list_all_objects(Prefix=prefix))
+
+        if len(contents) == 0:
+            print("Folder is empty.")
+            return True
+
+        # Get total size of objects
+        totalsize = sum([obj['Size'] for obj in contents])
+
+        def wakepy_fail(result):
+            print("Warning: Unable to keep system awake during download.")
+
+        # Prevent the system from sleeping during download
+        with keep.running(on_fail=wakepy_fail):
+            # Display a progress bar with the download progress
+            with tqdm(desc='download', ncols=60, total=totalsize, unit='B', unit_scale=1) as progress_bar:
+                for file in contents:
+                    try:
+                        # Get name of file in S3 bucket
+                        key = file['Key']
+
+                        # Split key by slashes - remove prefix from beginning
+                        path_list = key.removeprefix(prefix).split('/')
+                        # Get the base name of the file
+                        base_name = path_list[-1]
+
+                        # Create a Path at the destination specified
+                        dir = Path(destination)
+
+                        # If the current item has a prefix, append it to the destination path
+                        if len(path_list) > 1:
+                            dir = dir / '/'.join(path_list[:-1])
+
+                        # Make a directory at the specified path if it doesn't exist
+                        dir.mkdir(parents=True, exist_ok=True)
+
+                        # Create a new file path in the destination directory
+                        new_file_path = str(dir / base_name)
+
+                        # Download the file, trigger a callback function to update the progress bar
+                        transfer_manager.download(self.bucket_name, key, new_file_path, subscribers=[s3transfer.ProgressCallbackInvoker(progress_bar.update)])
+                    except Exception as e:
+                        print(e)
+                        return False
+                
+                # Wait for download to be complete to shut down
+                transfer_manager.shutdown()
+
+                return True
 
     def upload_all(self, directory, destination=None):
         '''Uploads all files from a directory to an S3 bucket
@@ -92,148 +231,6 @@ class Boto3Manager:
                 print(e)
                 return False
         
-        return True
-    
-    def fast_upload(self, path, destination=None):
-        '''Uploads files in a path recursively
-        
-        :param path: The path to upload files from
-        :param destination: The destination in the S3 bucket to upload to
-
-        :return: True if all uploads successful, False otherwise
-        '''
-
-        # Check parameters
-        assert path is not None and isinstance(path, str), "Path must be a string"
-        assert destination is None or isinstance(destination, str), "Destination must be a string"
-
-        # Convert path given into a Pure path
-        path = Path(path)
-        
-        # Ensure path exists
-        assert path.exists(), "Path does not exist"
-
-        # Get files in directory recursively, but only if they are not directories
-        files = [str(x) for x in path.glob('**/*') if not x.is_dir()]
-
-        totalsize = sum([os.stat(f).st_size for f in files])
-
-        with tqdm(desc='upload', ncols=60, total=totalsize, unit='B', unit_scale=1) as progress_bar:
-            for file in files:
-                # Remove the path from the beginning of the path to upload to bucket
-                destination_path = file.removeprefix(str(path) + "/")
-
-                # Prefix destination path if provided
-                if destination is not None:
-                    destination_path = destination + destination_path
-
-                self.transfer_manager.upload(file, self.bucket_name, destination_path, subscribers=[s3transfer.ProgressCallbackInvoker(progress_bar.update)])
-            
-            self.transfer_manager.shutdown()
-
-    def upload_files_recursive(self, path, destination=None):
-        '''Uploads files in a path recursively
-        
-        :param path: The path to upload files from
-        :param destination: The destination in the S3 bucket to upload to
-
-        :return: True if all uploads successful, False otherwise
-        '''
-
-        # Check parameters
-        assert path is not None and isinstance(path, str), "Path must be a string"
-        assert destination is None or isinstance(destination, str), "Destination must be a string"
-
-        # Convert path given into a Pure path
-        path = Path(path)
-        
-        # Ensure path exists
-        assert path.exists(), "Path does not exist"
-
-        # Get files in directory recursively, but only if they are not directories
-        files = [str(x) for x in path.glob('**/*') if not x.is_dir()]
-
-        def upload_single_file(file):
-            # Remove the path from the beginning of the path to upload to bucket
-            destination_path = file.removeprefix(str(path) + "/")
-
-            # Prefix destination path if provided
-            if destination is not None:
-                destination_path = destination + destination_path
-
-            self.client.upload_file(file, self.bucket_name, destination_path)
-            print(file)
-
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            executor.map(upload_single_file, files)
-        
-        # with ThreadPoolExecutor() as executor:
-        #     # Start the upload operations and mark each future with its filename
-        #     futures = {}
-        #     for file in files:
-        #         # Remove the path from the beginning of the path to upload to bucket
-        #         destination_path = file.removeprefix(str(path) + "/")
-
-        #         # Prefix destination path if provided
-        #         if destination is not None:
-        #             destination_path = destination + destination_path
-                
-        #         # Submit a future to the executor to upload the file
-        #         future = executor.submit(self.client.upload_file, file, self.bucket_name, destination_path)
-
-        #         # Add an entry in the dictionary containing the filename
-        #         futures[future] = file
-        #     # Loop through the futures as they complete
-        #     for future in concurrent.futures.as_completed(futures):
-        #         # Get the filename and print it
-        #         filename = futures[future]
-        #         print(f"Uploaded {filename}")
-
-        return True
-    
-    def download_files_recursive(self, destination, prefix=''):
-        '''Downloads the contents of a bucket or folder recursively from an S3 bucket
-
-        :param destination: The destination to download the files to
-        :param prefix: The prefix of files in the S3 bucket to download from
-        '''
-
-        assert destination is not None and isinstance(destination, str), "Destination must be a string"
-        assert prefix is not None and isinstance(prefix, str), "Prefix must be a string"
-
-        # Get contents of bucket with prefix
-        contents = self.client.list_objects_v2(Bucket=self.bucket_name, Prefix=prefix)['Contents']
-        
-        # Loop through each file in bucket
-        for item in contents:
-            try:
-                # Get name of file in S3 bucket
-                key = item['Key']
-
-                # Split key by slashes - remove prefix from beginning
-                path_list = key.removeprefix(prefix).split('/')
-                # Get the base name of the file
-                base_name = path_list[-1]
-
-                # Create a Path at the destination specified
-                dir = Path(destination)
-
-                # If the current item has a prefix, append it to the destination path
-                if len(path_list) > 1:
-                    dir = dir / '/'.join(path_list[:-1])
-
-                # Make a directory at the specified path if it doesn't exist
-                dir.mkdir(parents=True, exist_ok=True)
-
-                # Create a new file path in the destination directory
-                new_file_path = dir / base_name
-            
-                # Download the file from the S3 bucket to the file path on the user's local machine
-                self.client.download_file(self.bucket_name, key, new_file_path)
-            except ClientError as e:
-                print(e)
-                return False
-            
         return True
 
     def download_folder(self, folder, destination):
