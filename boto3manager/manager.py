@@ -50,6 +50,38 @@ class Boto3Manager:
         # Create paginator
         self.paginator = self.client.get_paginator('list_objects_v2')
 
+    def get_files(self, path):
+        '''Returns a list of files in a directory, recursively
+        
+        :param path: A string with the directory to get files from
+        
+        :return: A list containing strings with the files in the directory
+        '''
+
+        # Check argument
+        assert path is not None and isinstance(path, str), "Path must be a string"
+
+        # Get the files recursively
+        files = [str(x) for x in dir.glob('**/*') if not x.is_dir()]
+
+        return files
+    
+    def get_size(self, files):
+        '''Gets the total size of a list of files.
+
+        :param files: A list of paths to files
+
+        :return: The total size of the files, in bytes
+        '''
+
+        # Check argument
+        assert files is not None and isinstance(files, list), "Files must be a list"
+
+        # Get sum of all files in list
+        totalsize = sum([os.stat(f).st_size for f in files])
+
+        return totalsize        
+
     def upload(self, path, destination=None):
         '''Uploads files in a path recursively
         
@@ -73,10 +105,10 @@ class Boto3Manager:
         transfer_manager = s3transfer.create_transfer_manager(self.client, self.transfer_config)
 
         # Get files in directory recursively, but only if they are not directories
-        files = [str(x) for x in path.glob('**/*') if not x.is_dir()]
+        files = self.get_files(path)
 
         # Get total size of files in bytes
-        totalsize = sum([os.stat(f).st_size for f in files])
+        totalsize = self.get_size(files)
 
         def wakepy_fail(result):
             print("Warning: Unable to keep system awake during upload.")
