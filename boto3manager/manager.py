@@ -109,7 +109,7 @@ class Boto3Manager:
         transfer_manager = s3transfer.create_transfer_manager(self.client, self.transfer_config)
 
         # Get files in directory recursively, but only if they are not directories
-        files = self.get_files(path)
+        files = self.get_files(str(path))
 
         # Get total size of files in bytes
         totalsize = self.get_size(files)
