@@ -61,8 +61,12 @@ class Boto3Manager:
         # Check argument
         assert path is not None and isinstance(path, str), "Path must be a string"
 
+        path = Path(path)
+
+        assert path.exists(), "Path does not exist"
+
         # Get the files recursively
-        files = [str(x) for x in dir.glob('**/*') if not x.is_dir()]
+        files = [str(x) for x in path.glob('**/*') if not x.is_dir()]
 
         return files
     
