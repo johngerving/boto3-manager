@@ -86,7 +86,7 @@ class Boto3Manager:
 
         return totalsize        
 
-    def upload(self, path, destination=None):
+    def upload(self, path, prefix=None):
         '''Uploads files in a path recursively
         
         :param path: The path to upload files from
@@ -97,7 +97,7 @@ class Boto3Manager:
 
         # Check parameters
         assert path is not None and isinstance(path, str), "Path must be a string"
-        assert destination is None or isinstance(destination, str), "Destination must be a string"
+        assert prefix is None or isinstance(prefix, str), "Prefix must be a string"
 
         # Convert path given into a Pure path
         path = Path(path)
@@ -123,12 +123,12 @@ class Boto3Manager:
             with tqdm(desc='upload', ncols=60, total=totalsize, unit='B', unit_scale=1) as progress_bar:
                 for file in files:
                     try:
-                        # Remove the path from the beginning of the path to upload to bucket
-                        destination_path = file.removeprefix(str(path) + "/")
+                        # Remove the path from the beginning of the path to upload to bucket - convert to Posix path for Windows support
+                        destination_path = Path(file).relative_to(path).as_posix()
 
                         # Prefix destination path if provided
-                        if destination is not None:
-                            destination_path = destination + destination_path
+                        if prefix is not None:
+                            destination_path = prefix + destination_path
 
                         # Upload the file, trigger a callback function to update the progress bar
                         transfer_manager.upload(file, self.bucket_name, destination_path, subscribers=[s3transfer.ProgressCallbackInvoker(progress_bar.update)])
