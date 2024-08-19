@@ -11,10 +11,12 @@ from wakepy import keep
 class Boto3Manager:
     def __init__(self, credentials_file_path, profile, endpoint_url, bucket_name, workers=20):
         '''
-        :param credentials_file_path: A path to a file containing S3 credentials
-        :param profile: The S3 profile to use from the credentials file
-        :param endpoint_url: The S3 endpoint to upload and download to and from
-        :param bucket_name: The name of the S3 bucket to use
+        Manages Boto3 resources and handles uploading and downloading to and from S3.
+
+        :param credentials_file_path (str): A path to a file containing S3 credentials
+        :param profile (str): The S3 profile to use from the credentials file
+        :param endpoint_url (str): The S3 endpoint to upload and download to and from
+        :param bucket_name (str): The name of the S3 bucket to use
         '''
 
         assert credentials_file_path is not None and isinstance(credentials_file_path, str), "credentials_file_path must be a string"
@@ -53,9 +55,9 @@ class Boto3Manager:
     def get_files(self, path):
         '''Returns a list of files in a directory, recursively
         
-        :param path: A string with the directory to get files from
+        :param path (str): A string with the directory to get files from
         
-        :return: A list containing strings with the files in the directory
+        :return (list): A list containing strings with the files in the directory
         '''
 
         # Check argument
@@ -73,9 +75,9 @@ class Boto3Manager:
     def get_size(self, files):
         '''Gets the total size of a list of files.
 
-        :param files: A list of paths to files
+        :param files (list): A list of paths to files
 
-        :return: The total size of the files, in bytes
+        :return (int): The total size of the files, in bytes
         '''
 
         # Check argument
@@ -89,10 +91,10 @@ class Boto3Manager:
     def upload(self, path, prefix=None):
         '''Uploads files in a path recursively
         
-        :param path: The path to upload files from
-        :param destination: The destination in the S3 bucket to upload to
+        :param path (str): The path to upload files from
+        :param destination (str): The destination in the S3 bucket to upload to
 
-        :return: True if all uploads successful, False otherwise
+        :return (bool): True if all uploads successful, False otherwise
         '''
 
         # Check parameters
@@ -163,10 +165,10 @@ class Boto3Manager:
     def download(self, destination, prefix=''):
         '''Downloads the contents of a bucket or folder recursively from an S3 bucket
         
-        :param destination: The destination to download the files to
-        :param prefix: The prefix of files in the S3 bucket to download from
+        :param destination (str): The destination to download the files to
+        :param prefix (str): The prefix of files in the S3 bucket to download from
 
-        :return: True if all uploads successful, otherwise False
+        :return (bool): True if all uploads successful, otherwise False
         '''
 
         assert destination is not None and isinstance(destination, str), "Destination must be a string"

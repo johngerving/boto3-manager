@@ -44,15 +44,6 @@ Manages Boto3 resources and handles uploading and downloading to and from S3.
 :param bucket_name (str): The name of the S3 bucket to use
 ```
 
-#### Properties
-| Name                  | Type | Description                                                               |
-|-----------------------|------|---------------------------------------------------------------------------|
-| credentials_file_path | str  | The path to the file containing S3 credentials.                           |
-| profile               | str  | The S3 profile to use from the credentials file.                          |
-| endpoint_url          | str  | The S3 endpoint URL.                                                      |
-| bucket_name           | str  | The bucket name to use for S3 operations                                  |
-| workers               | int  | The maximum number of worker threads to create for uploads and downloads. |
-
 #### Methods
 
 **download**
