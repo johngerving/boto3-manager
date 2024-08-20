@@ -5,12 +5,12 @@ A Python library for managing file uploads and downloads in Boto3.
 ## Installation
 On Linux:
 ```
-pip3 install --upgrade https://gitlab.nrp-nautilus.io/humboldt/boto3-manager.git
+pip3 install --upgrade git+https://gitlab.nrp-nautilus.io/humboldt/boto3-manager.git
 ```
 
 On Windows:
 ```
-py -m pip install --upgrade https://gitlab.nrp-nautilus.io/humboldt/boto3-manager.git
+py -m pip install --upgrade git+https://gitlab.nrp-nautilus.io/humboldt/boto3-manager.git
 ```
 
 ## Usage
