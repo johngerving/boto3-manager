@@ -2,7 +2,6 @@ package boto3manager
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -13,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/schollz/progressbar/v3"
 )
 
 type BucketBasics struct {
@@ -22,6 +22,10 @@ type BucketBasics struct {
 type FileUpload struct {
 	Path string
 	Key  string
+}
+
+type UploadObjectOptions struct {
+	bar *progressbar.ProgressBar
 }
 
 // ListObjects takes a bucket name and lists all objects in the bucket.
@@ -42,7 +46,7 @@ func (basics BucketBasics) ListObjects(bucketName string) ([]types.Object, error
 }
 
 // UploadObject takes a path to a file, the key to name the object, and a bucket name and uploads the file to the bucket.
-func (basics BucketBasics) UploadObject(path string, key string, bucketName string) error {
+func (basics BucketBasics) UploadObject(path string, key string, bucketName string, options UploadObjectOptions) error {
 	// Create a new upload manager
 	uploader := manager.NewUploader(basics.S3Client)
 
@@ -61,7 +65,16 @@ func (basics BucketBasics) UploadObject(path string, key string, bucketName stri
 		Body:   f,
 	})
 
-	fmt.Println("Uploaded", path)
+	if options.bar != nil {
+		fileInfo, err := os.Stat(path)
+
+		if err != nil {
+			log.Printf("Couldn't get size of uploaded file %v: %v", path, err)
+		}
+		options.bar.Add(int(fileInfo.Size()))
+	}
+
+	// fmt.Println("Uploaded", path)
 
 	if err != nil {
 		log.Printf("Couldn't upload object %v to bucket %v: %v\n", path, bucketName, err)
@@ -94,6 +107,17 @@ func (basics BucketBasics) UploadObjects(pattern string, dest string, bucketName
 		return err
 	}
 
+	// Get total size of files to be uploaded
+	totalSize, err := totalFileSize(matches)
+
+	if err != nil {
+		log.Printf("Error getting total file size: %v", err)
+		return err
+	}
+
+	// Make a progress bar
+	bar := progressbar.DefaultBytes(totalSize, "uploading")
+
 	// Make a queue for files to upload
 	queue := make(chan *FileUpload)
 
@@ -109,8 +133,8 @@ func (basics BucketBasics) UploadObjects(pattern string, dest string, bucketName
 
 			// Get file upload from queue
 			for file := range queue {
-				fmt.Printf("Received %v from queue\n", file.Path)
-				basics.UploadObject(file.Path, file.Key, bucketName)
+				// fmt.Printf("Received %v from queue\n", file.Path)
+				basics.UploadObject(file.Path, file.Key, bucketName, UploadObjectOptions{bar: bar})
 			}
 		}()
 	}
@@ -128,7 +152,7 @@ func (basics BucketBasics) UploadObjects(pattern string, dest string, bucketName
 			Key:  relToParentDir,
 		}
 
-		fmt.Printf("Sending %v to queue\n", upload.Path)
+		// fmt.Printf("Sending %v to queue\n", upload.Path)
 
 		queue <- &upload
 	}
@@ -138,4 +162,24 @@ func (basics BucketBasics) UploadObjects(pattern string, dest string, bucketName
 	wg.Wait()
 
 	return err
+}
+
+// totalFileSize gets the total size of a slice of paths to files.
+func totalFileSize(paths []string) (int64, error) {
+	var size int64
+	for _, path := range paths {
+		// Get file info of each path
+		fileInfo, err := os.Stat(path)
+
+		if err != nil {
+			return 0, err
+		}
+
+		// Get size of file if it isn't a directory
+		if !fileInfo.IsDir() {
+			size += fileInfo.Size()
+		}
+	}
+
+	return size, nil
 }
