@@ -41,5 +41,5 @@ func main() {
 
 	bucketBasics := boto3manager.BucketBasics{S3Client: s3Client}
 
-	bucketBasics.UploadObjects("lupinus/*", "", "humboldt-s3-test")
+	bucketBasics.DownloadObjects("I", "humboldt-s3-test")
 }

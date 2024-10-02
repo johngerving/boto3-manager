@@ -2,6 +2,7 @@ package boto3manager
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -28,21 +29,39 @@ type UploadObjectOptions struct {
 	bar *progressbar.ProgressBar
 }
 
+type DownloadObjectOptions struct {
+	bar *progressbar.ProgressBar
+}
+
 // ListObjects takes a bucket name and lists all objects in the bucket.
 func (basics BucketBasics) ListObjects(bucketName string) ([]types.Object, error) {
-	// Get the objects from the bucket
-	result, err := basics.S3Client.ListObjectsV2(context.TODO(), &s3.ListObjectsV2Input{
+	// Get every item in bucket
+	params := &s3.ListObjectsV2Input{
 		Bucket: aws.String(bucketName),
-	})
-
-	// Get contents of bucket
-	var contents []types.Object
-	if err != nil {
-		log.Printf("Couldn't list objects in bucket %v: %v\n", bucketName, err)
-	} else {
-		contents = result.Contents
 	}
-	return contents, err
+
+	// Create the Paginator for the ListObjectsV2 operation
+	p := s3.NewListObjectsV2Paginator(basics.S3Client, params)
+
+	results := make([]types.Object, 0)
+
+	// Iterate through S3 object pages
+	var i int
+	for p.HasMorePages() {
+		i++
+
+		// Next Page takes a new context for each page retrieval
+		page, err := p.NextPage(context.TODO())
+		if err != nil {
+			log.Fatalf("Failed to get page %v in bucket %v: %v", i, bucketName, err)
+			return nil, err
+		}
+
+		// Append to results
+		results = append(results, page.Contents...)
+	}
+
+	return results, nil
 }
 
 // UploadObject takes a path to a file, the key to name the object, and a bucket name and uploads the file to the bucket.
@@ -182,4 +201,94 @@ func totalFileSize(paths []string) (int64, error) {
 	}
 
 	return size, nil
+}
+
+// DownloadObject takes a key, a destination, and a bucket name and downloads the object with that key to the destination.
+func (basics BucketBasics) DownloadObject(key string, dest string, bucketName string, options DownloadObjectOptions) error {
+	// Create a new download manager
+	manager := manager.NewDownloader(basics.S3Client)
+
+	// Create the destination directory if it doesn't exist already
+	err := os.MkdirAll(dest, os.ModePerm)
+
+	if err != nil {
+		log.Printf("Couldn't create directory %v: %v", dest, err)
+	}
+
+	// Get base name of file
+	baseName := filepath.Base(key)
+
+	// Create file name from destination path and base name of key in bucket
+	fileName := filepath.Join(dest, baseName)
+
+	// Create the file
+	f, err := os.Create(fileName)
+
+	if err != nil {
+		log.Printf("Couldn't open file %v: %v", fileName, err)
+		return err
+	}
+
+	// Close the file after everything is finished
+	defer f.Close()
+
+	// Download the file
+	_, err = manager.Download(context.Background(), f, &s3.GetObjectInput{
+		Bucket: aws.String(bucketName),
+		Key:    aws.String(key),
+	})
+
+	if err != nil {
+		log.Printf("Couldn't download file %v: %v", key, err)
+		return err
+	}
+
+	return nil
+}
+
+func (basics BucketBasics) DownloadObjects(pattern string, bucketName string) error {
+	// Get the prefix of the pattern by stopping before the first wildcard
+	firstWildcard := strings.Index(pattern, "*")
+	prefix := pattern
+	if firstWildcard > -1 {
+		prefix = pattern[:firstWildcard]
+	}
+
+	// Get every item in bucket
+	params := &s3.ListObjectsV2Input{
+		Bucket: aws.String(bucketName),
+	}
+
+	// If the pattern has a prefix that can be identified, add it to the input struct instance.
+	// Otherwise, list all objects.
+	if len(prefix) > 0 {
+		params.Prefix = &prefix
+	}
+
+	// Create the Paginator for the ListObjectsV2 operation
+	p := s3.NewListObjectsV2Paginator(basics.S3Client, params)
+
+	results := make([]types.Object, 0)
+
+	// Iterate through S3 object pages
+	var i int
+	for p.HasMorePages() {
+		i++
+
+		// Next Page takes a new context for each page retrieval
+		page, err := p.NextPage(context.TODO())
+		if err != nil {
+			log.Fatalf("Failed to get page %v in bucket %v: %v", i, bucketName, err)
+			return err
+		}
+
+		// Append to results
+		results = append(results, page.Contents...)
+	}
+
+	for _, item := range results {
+		fmt.Println(*item.Key)
+	}
+
+	return nil
 }
