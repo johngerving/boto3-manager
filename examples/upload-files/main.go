@@ -21,6 +21,8 @@ func (r *Resolver) ResolveEndpoint(_ context.Context, params s3.EndpointParamete
 	return transport.Endpoint{URI: u}, nil
 }
 
+type NoOpRateLimit struct{}
+
 func main() {
 	config, err := config.LoadDefaultConfig(context.TODO())
 	if err != nil {
@@ -37,9 +39,11 @@ func main() {
 
 	s3Client := s3.NewFromConfig(config, func(o *s3.Options) {
 		o.EndpointResolverV2 = &Resolver{URL: endpointURL}
+		o.RetryMode = "adaptive"
 	})
 
 	bucketBasics := boto3manager.BucketBasics{S3Client: s3Client}
 
-	bucketBasics.DownloadObjects("I", "humboldt-s3-test")
+	// bucketBasics.UploadObjects("**/*", "", "humboldt-s3-test")
+	bucketBasics.DownloadObjects("**/*", "output", "humboldt-s3-test")
 }

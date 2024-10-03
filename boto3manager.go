@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/schollz/progressbar/v3"
+	"gitlab.nrp-nautilus.io/humboldt/boto3-manager/strutil"
 )
 
 type BucketBasics struct {
@@ -23,6 +25,11 @@ type BucketBasics struct {
 type FileUpload struct {
 	Path string
 	Key  string
+}
+
+type FileDownload struct {
+	Key         string
+	Destination string
 }
 
 type UploadObjectOptions struct {
@@ -106,18 +113,39 @@ func (basics BucketBasics) UploadObject(path string, key string, bucketName stri
 // to the destination concurrently. dest must be empty or end with a "/" to signify a prefix
 func (basics BucketBasics) UploadObjects(pattern string, dest string, bucketName string) error {
 	// Get the files matching the pattern given
-	matches, err := filepath.Glob(pattern)
+	fs := os.DirFS(".")
+	matches, err := strutil.Glob(fs, pattern)
+
+	for _, match := range matches {
+		fmt.Println(match)
+	}
+
+	if err != nil {
+		log.Printf("Error parsing file pattern: %v\n", err)
+		return err
+	}
+
+	dirExcluded := make([]string, 0, len(matches))
+	// Filter the matches to only include files
+	for _, match := range matches {
+		// Get file info of each path
+		fileInfo, err := os.Stat(match)
+
+		if err != nil {
+			return err
+		}
+
+		// Append file path if it isn't a directory
+		if !fileInfo.IsDir() {
+			dirExcluded = append(dirExcluded, filepath.ToSlash(match))
+		}
+	}
 
 	parentDir := pattern
 
 	globIndex := strings.Index(pattern, "*")
 	if globIndex != -1 {
 		parentDir = parentDir[:globIndex]
-	}
-
-	if err != nil {
-		log.Printf("Error parsing file pattern: %v\n", err)
-		return err
 	}
 
 	// Check that the destination is empty or ends in "/"
@@ -127,7 +155,8 @@ func (basics BucketBasics) UploadObjects(pattern string, dest string, bucketName
 	}
 
 	// Get total size of files to be uploaded
-	totalSize, err := totalFileSize(matches)
+	totalSize, err := totalFileSize(dirExcluded)
+	fmt.Println(totalSize)
 
 	if err != nil {
 		log.Printf("Error getting total file size: %v", err)
@@ -159,15 +188,15 @@ func (basics BucketBasics) UploadObjects(pattern string, dest string, bucketName
 	}
 
 	// For each file, create a FileUpload struct instance and send it to the queue
-	for _, match := range matches {
+	for _, path := range dirExcluded {
 		// Get the path of a given file excluding the parent directory - this will be the key of the file upload
-		relToParentDir, err := filepath.Rel(parentDir, match)
+		relToParentDir, err := filepath.Rel(parentDir, path)
 		if err != nil {
-			log.Printf("Couldn't get path of %v relative to %v: %v\n", parentDir, match, err)
+			log.Printf("Couldn't get path of %v relative to %v: %v\n", parentDir, path, err)
 		}
 
 		upload := FileUpload{
-			Path: match,
+			Path: path,
 			Key:  relToParentDir,
 		}
 
@@ -243,10 +272,24 @@ func (basics BucketBasics) DownloadObject(key string, dest string, bucketName st
 		return err
 	}
 
+	fmt.Printf("Downloaded %v\n", key)
+
+	// Get size of downloaded file and update progress bar
+	if options.bar != nil {
+		fileInfo, err := os.Stat(f.Name())
+
+		if err != nil {
+			log.Printf("Couldn't get size of downloaded file %v: %v", f.Name(), err)
+		}
+		options.bar.Add(int(fileInfo.Size()))
+	}
+
 	return nil
 }
 
-func (basics BucketBasics) DownloadObjects(pattern string, bucketName string) error {
+// DownloadObjects takes a pattern, a destination, and a bucket name and downloads all objects in the bucket matching
+// that pattern to the destination.
+func (basics BucketBasics) DownloadObjects(pattern string, dest string, bucketName string) error {
 	// Get the prefix of the pattern by stopping before the first wildcard
 	firstWildcard := strings.Index(pattern, "*")
 	prefix := pattern
@@ -286,9 +329,73 @@ func (basics BucketBasics) DownloadObjects(pattern string, bucketName string) er
 		results = append(results, page.Contents...)
 	}
 
+	// Create a regular expression from the given pattern
+	re := regexp.MustCompile(strutil.WildCardToRegexp(pattern))
+
+	// Create a slice of strings to store matches
+	matches := make([]types.Object, 0, len(results))
+
+	// Loop through contents of bucket
 	for _, item := range results {
-		fmt.Println(*item.Key)
+		// Append to slice if the key of the object matches the given pattern
+		if re.MatchString(*item.Key) {
+			matches = append(matches, item)
+		}
 	}
 
+	// Get the total size of the objects matching the pattern
+	totalSize := totalObjectSize(matches)
+
+	// Make a progress bar
+	bar := progressbar.DefaultBytes(totalSize, "uploading")
+
+	// Make a queue for files to download
+	queue := make(chan *FileDownload)
+
+	var wg sync.WaitGroup
+	workerCount := 50
+
+	// Create a goroutine for each worker
+	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			// Get file download from queue
+			for file := range queue {
+				fmt.Printf("Received %v from queue\n", file.Key)
+				basics.DownloadObject(file.Key, file.Destination, bucketName, DownloadObjectOptions{bar: bar})
+			}
+		}()
+	}
+
+	// For each file, create a FileDownload struct instance and send it to the queue
+	for _, object := range matches {
+
+		download := FileDownload{
+			Key:         *object.Key,
+			Destination: filepath.Join(dest, *object.Key), // Write to file in destination directory with the name being the object's key
+		}
+
+		fmt.Printf("Sending %v to queue\n", download.Key)
+
+		queue <- &download
+	}
+
+	close(queue)
+
+	wg.Wait()
+
 	return nil
+}
+
+// totalObjectSize takes a list of items in an S3 bucket and returns the total size in bytes.
+func totalObjectSize(objects []types.Object) int64 {
+	var size int64
+	for _, object := range objects {
+		size += *object.Size
+	}
+
+	return size
 }

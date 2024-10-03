@@ -15,22 +15,27 @@ func TestWildCardToRegexp(t *testing.T) {
 		{
 			name:    "empty string",
 			pattern: "",
-			wanted:  "",
+			wanted:  "^$",
 		},
 		{
 			name:    "main*",
 			pattern: "main*",
-			wanted:  "main.*",
+			wanted:  "^main[^\\/]*$",
 		},
 		{
 			name:    "*.txt",
 			pattern: "*.txt",
-			wanted:  ".*\\.txt",
+			wanted:  "^[^\\/]*\\.txt$",
 		},
 		{
 			name:    "?_main*.txt",
 			pattern: "?_main*.txt",
-			wanted:  "._main.*\\.txt",
+			wanted:  "^[^\\/]_main[^\\/]*\\.txt$",
+		},
+		{
+			name:    "**/*",
+			pattern: "**/*",
+			wanted:  "^.*[^\\/]*$",
 		},
 	}
 
